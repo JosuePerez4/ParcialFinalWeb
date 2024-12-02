@@ -22,10 +22,8 @@ public class DetallesCompra {
     @Column(nullable = false)
     private Integer cantidad;
 
-    @Column(nullable = false, precision = 10, scale = 2)
     private Double precio;
 
-    @Column(precision = 5, scale = 2)
     private Double descuento;
 
     // Getters y setters

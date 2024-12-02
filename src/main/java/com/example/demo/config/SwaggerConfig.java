@@ -8,13 +8,13 @@ import io.swagger.v3.oas.models.info.Info;
 @Configuration
 public class SwaggerConfig {
 
-	@Bean
-	public GroupedOpenApi facturaApi() {
-		return GroupedOpenApi.builder().group("factura").pathsToMatch("/crear/**", "/consultar/**").build();
+    @Bean
+    GroupedOpenApi publicApi() {
+		return GroupedOpenApi.builder().group("public").pathsToMatch("/**").build();
 	}
 
 	@Bean
-	public Info apiInfo() {
+	Info apiInfo() {
 		return new Info().title("API de Facturación").description("API para crear y consultar facturas").version("1.0");
 	}
 }

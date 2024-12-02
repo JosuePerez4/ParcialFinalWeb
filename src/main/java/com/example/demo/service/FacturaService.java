@@ -13,206 +13,204 @@ import com.example.demo.repository.*;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 public class FacturaService {
 
-    @Autowired
-    private ClienteRepository clienteRepository;
+	@Autowired
+	private ClienteRepository clienteRepository;
+	@Autowired
+	private ProductoRepository productoRepository;
+	@Autowired
+	private TipoPagoRepository tipoPagoRepository;
+	@Autowired
+	private TiendaRepository tiendaRepository;
+	@Autowired
+	private VendedorRepository vendedorRepository;
+	@Autowired
+	private CajeroRepository cajeroRepository;
+	@Autowired
+	private CompraRepository compraRepository;
+	@Autowired
+	private DetallesCompraRepository detallesCompraRepository;
+	@Autowired
+	private PagoRepository pagoRepository;
 
-    @Autowired
-    private ProductoRepository productoRepository;
+	public FacturaResponseDTO createFactura(String tiendaUuid, FacturaRequestDTO request) {
+		// 1. Validar si la tienda existe
+		UUID uuid = UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
+		Tienda tienda = tiendaRepository.findByUuid(uuid)
+				.orElseThrow(() -> new IllegalArgumentException("La tienda no existe"));
 
-    @Autowired
-    private TipoPagoRepository tipoPagoRepository;
+		// 2. Validar el cliente
+		Cliente cliente = clienteRepository
+				.findByDocumentoAndTipoDocumento(request.getCliente().getDocumento(),
+						request.getCliente().getTipoDocumento().toString()) // Corregir el tipo de tipoDocumento
+				.orElseGet(() -> {
+					// Registrar el cliente si no existe
+					Cliente nuevoCliente = new Cliente();
+					nuevoCliente.setDocumento(request.getCliente().getDocumento());
+					nuevoCliente.setNombre(request.getCliente().getNombre());
+					TipoDocumento tipoDocumento = new TipoDocumento();
+					tipoDocumento.setNombre(request.getCliente().getTipoDocumento());
+					nuevoCliente.setTipoDocumento(tipoDocumento);
+					return clienteRepository.save(nuevoCliente);
+				});
 
-    @Autowired
-    private TiendaRepository tiendaRepository;
+		// 3. Validar el vendedor
+		Vendedor vendedor = vendedorRepository.findByDocumento(request.getVendedor().getDocumento())
+				.orElseThrow(() -> new IllegalArgumentException("El vendedor no existe en la tienda"));
 
-    @Autowired
-    private VendedorRepository vendedorRepository;
+		// 4. Validar el cajero
+		Cajero cajero = cajeroRepository.findByToken(request.getCajero().getToken()).orElseThrow(
+				() -> new IllegalArgumentException("El token no corresponde a ningún cajero en la tienda"));
 
-    @Autowired
-    private CajeroRepository cajeroRepository;
+		if (!cajero.getTienda().equals(tienda)) {
+			throw new IllegalArgumentException("El cajero no está asignado a esta tienda");
+		}
 
-    @Autowired
-    private CompraRepository compraRepository;
+		// 5. Validar productos
+		double total = 0.0;
+		for (FacturaRequestDTO.ProductoDTO productoDTO : request.getProductos()) {
+			Producto producto = productoRepository.findByReferencia(productoDTO.getReferencia())
+					.orElseThrow(() -> new IllegalArgumentException(
+							"La referencia del producto " + productoDTO.getReferencia() + " no existe"));
 
-    @Autowired
-    private DetallesCompraRepository detallesCompraRepository;
+			if (producto.getCantidad() < productoDTO.getCantidad()) {
+				throw new IllegalArgumentException("La cantidad a comprar supera el máximo del producto en tienda");
+			}
 
-    @Autowired
-    private PagoRepository pagoRepository;
+			double subtotal = producto.getPrecio() * productoDTO.getCantidad()
+					- (producto.getPrecio() * productoDTO.getCantidad() * productoDTO.getDescuento() / 100);
+			total += subtotal;
 
-    public FacturaResponseDTO createFactura(String tiendaUuid, FacturaRequestDTO request) {
-        // 1. Validar si la tienda existe
-        Tienda tienda = tiendaRepository.findByUuid(tiendaUuid)
-                .orElseThrow(() -> new IllegalArgumentException("La tienda no existe"));
+			producto.setCantidad(producto.getCantidad() - productoDTO.getCantidad());
+			productoRepository.save(producto);
+		}
 
-        // 2. Validar el cliente
-        Cliente cliente = clienteRepository.findByDocumentoAndTipoDocumento(
-                request.getCliente().getDocumento(),
-                request.getCliente().getTipoDocumento().toString()) // Corregir el tipo de tipoDocumento
-                .orElseGet(() -> {
-                    // Registrar el cliente si no existe
-                    Cliente nuevoCliente = new Cliente();
-                    nuevoCliente.setDocumento(request.getCliente().getDocumento());
-                    nuevoCliente.setNombre(request.getCliente().getNombre());
-                    TipoDocumento tipoDocumento = new TipoDocumento();
-                    tipoDocumento.setNombre(request.getCliente().getTipoDocumento());
-                    nuevoCliente.setTipoDocumento(tipoDocumento);
-                    return clienteRepository.save(nuevoCliente);
-                });
+		// 6. Validar medios de pago
+		double totalPagos = 0.0;
+		if (request.getMediosPago().isEmpty()) {
+			throw new IllegalArgumentException("No hay medios de pagos asignados para esta compra");
+		}
+		for (FacturaRequestDTO.MedioPagoDTO medioPagoDTO : request.getMediosPago()) {
+			TipoPago tipoPago = tipoPagoRepository.findByNombre(medioPagoDTO.getTipoPago())
+					.orElseThrow(() -> new IllegalArgumentException("Tipo de pago no permitido en la tienda"));
 
-        // 3. Validar el vendedor
-        Vendedor vendedor = vendedorRepository.findByDocumento(request.getVendedor().getDocumento())
-                .orElseThrow(() -> new IllegalArgumentException("El vendedor no existe en la tienda"));
+			totalPagos += medioPagoDTO.getValor();
+		}
 
-        // 4. Validar el cajero
-        Cajero cajero = cajeroRepository.findByToken(request.getCajero().getToken()).orElseThrow(
-                () -> new IllegalArgumentException("El token no corresponde a ningún cajero en la tienda"));
+		if (total != totalPagos) {
+			throw new IllegalArgumentException("El valor de la factura no coincide con el valor total de los pagos");
+		}
 
-        if (!cajero.getTienda().equals(tienda)) {
-            throw new IllegalArgumentException("El cajero no está asignado a esta tienda");
-        }
+		// 7. Crear la factura (compra)
+		Compra compra = new Compra();
+		compra.setCliente(cliente);
+		compra.setTienda(tienda);
+		compra.setVendedor(vendedor);
+		compra.setCajero(cajero);
+		compra.setTotal(total);
+		compra.setImpuestos(request.getImpuesto());
+		compra.setFecha(LocalDateTime.now());
+		Compra facturaGuardada = compraRepository.save(compra);
 
-        // 5. Validar productos
-        double total = 0.0;
-        for (FacturaRequestDTO.ProductoDTO productoDTO : request.getProductos()) {
-            Producto producto = productoRepository.findByReferencia(productoDTO.getReferencia())
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            "La referencia del producto " + productoDTO.getReferencia() + " no existe"));
+		// 8. Guardar detalles de compra
+		for (FacturaRequestDTO.ProductoDTO productoDTO : request.getProductos()) {
+			Producto producto = productoRepository.findByReferencia(productoDTO.getReferencia()).get();
 
-            if (producto.getCantidad() < productoDTO.getCantidad()) {
-                throw new IllegalArgumentException("La cantidad a comprar supera el máximo del producto en tienda");
-            }
+			DetallesCompra detallesCompra = new DetallesCompra();
+			detallesCompra.setCompra(facturaGuardada);
+			detallesCompra.setProducto(producto);
+			detallesCompra.setCantidad(productoDTO.getCantidad());
+			detallesCompra.setPrecio(producto.getPrecio());
+			detallesCompra.setDescuento(productoDTO.getDescuento());
 
-            double subtotal = producto.getPrecio() * productoDTO.getCantidad()
-                    - (producto.getPrecio() * productoDTO.getCantidad() * productoDTO.getDescuento() / 100);
-            total += subtotal;
+			detallesCompraRepository.save(detallesCompra);
+		}
 
-            producto.setCantidad(producto.getCantidad() - productoDTO.getCantidad());
-            productoRepository.save(producto);
-        }
+		// 9. Guardar pagos
+		for (FacturaRequestDTO.MedioPagoDTO medioPagoDTO : request.getMediosPago()) {
+			Pago pago = new Pago();
+			pago.setCompra(facturaGuardada);
+			pago.setTipoPago(tipoPagoRepository.findByNombre(medioPagoDTO.getTipoPago()).get());
+			pago.setTarjetaTipo(medioPagoDTO.getTipoTarjeta());
+			pago.setCuotas(medioPagoDTO.getCuotas());
+			pago.setValor(medioPagoDTO.getValor());
 
-        // 6. Validar medios de pago
-        double totalPagos = 0.0;
-        for (FacturaRequestDTO.MedioPagoDTO medioPagoDTO : request.getMediosPago()) {
-            TipoPago tipoPago = tipoPagoRepository.findByNombre(medioPagoDTO.getTipoPago())
-                    .orElseThrow(() -> new IllegalArgumentException("Tipo de pago no permitido en la tienda"));
+			pagoRepository.save(pago);
+		}
 
-            totalPagos += medioPagoDTO.getValor();
-        }
+		// 10. Retornar respuesta
+		FacturaResponseDTO response = new FacturaResponseDTO();
+		response.setStatus("success");
+		response.setMessage("La factura se ha creado correctamente con el número: " + facturaGuardada.getId());
+		FacturaResponseDTO.FacturaData data = new FacturaResponseDTO.FacturaData();
+		data.setNumero(facturaGuardada.getId());
+		data.setTotal(total);
+		data.setFecha(facturaGuardada.getFecha());
+		response.setData(data);
 
-        if (total != totalPagos) {
-            throw new IllegalArgumentException("El valor de la factura no coincide con el valor total de los pagos");
-        }
+		return response;
+	}
 
-        // 7. Crear la factura (compra)
-        Compra compra = new Compra();
-        compra.setCliente(cliente);
-        compra.setTienda(tienda);
-        compra.setVendedor(vendedor);
-        compra.setCajero(cajero);
-        compra.setTotal(total);
-        compra.setImpuestos(request.getImpuesto());
-        compra.setFecha(LocalDateTime.now());
-        Compra facturaGuardada = compraRepository.save(compra);
+	public FacturaConsultaResponseDTO consultarFactura(String tiendaUuid, FacturaConsultaRequestDTO request) {
+		// Validar el token del cajero
+		Cajero cajero = cajeroRepository.findByToken(request.getToken()).orElseThrow(
+				() -> new IllegalArgumentException("El token no corresponde a ningún cajero en la tienda"));
 
-        // 8. Guardar detalles de compra
-        for (FacturaRequestDTO.ProductoDTO productoDTO : request.getProductos()) {
-            Producto producto = productoRepository.findByReferencia(productoDTO.getReferencia()).get();
+		// Validar la factura
+		Compra compra = compraRepository.findById(request.getFactura())
+				.orElseThrow(() -> new IllegalArgumentException("Factura no encontrada"));
 
-            DetallesCompra detallesCompra = new DetallesCompra();
-            detallesCompra.setCompra(facturaGuardada);
-            detallesCompra.setProducto(producto);
-            detallesCompra.setCantidad(productoDTO.getCantidad());
-            detallesCompra.setPrecio(producto.getPrecio());
-            detallesCompra.setDescuento(productoDTO.getDescuento());
+		if (!compra.getCajero().equals(cajero)) {
+			throw new IllegalArgumentException("El cajero no tiene permisos para consultar esta factura");
+		}
 
-            detallesCompraRepository.save(detallesCompra);
-        }
+		// Validar el cliente
+		Cliente cliente = clienteRepository
+				.findByDocumentoAndTipoDocumento(request.getCliente(),
+						compra.getCliente().getTipoDocumento().toString()) // Cambié el objeto por el string
+				.orElseThrow(() -> new IllegalArgumentException("Cliente no encontrado"));
 
-        // 9. Guardar pagos
-        for (FacturaRequestDTO.MedioPagoDTO medioPagoDTO : request.getMediosPago()) {
-            Pago pago = new Pago();
-            pago.setCompra(facturaGuardada);
-            pago.setTipoPago(tipoPagoRepository.findByNombre(medioPagoDTO.getTipoPago()).get());
-            pago.setTarjetaTipo(medioPagoDTO.getTipoTarjeta());
-            pago.setCuotas(medioPagoDTO.getCuotas());
-            pago.setValor(medioPagoDTO.getValor());
+		// Construir la respuesta
+		FacturaConsultaResponseDTO response = new FacturaConsultaResponseDTO();
+		response.setTotal(compra.getTotal());
+		response.setImpuestos(compra.getImpuestos());
 
-            pagoRepository.save(pago);
-        }
+		// Convertir cliente a ClienteDTO
+		ClienteDTO clienteDTO = new ClienteDTO();
+		clienteDTO.setDocumento(cliente.getDocumento());
+		clienteDTO.setNombre(cliente.getNombre());
+		clienteDTO.setTipoDocumento(cliente.getTipoDocumento().toString()); // Ahora pasamos el valor como String
+		response.setCliente(clienteDTO);
 
-        // 10. Retornar respuesta
-        FacturaResponseDTO response = new FacturaResponseDTO();
-        response.setStatus("success");
-        response.setMessage("La factura se ha creado correctamente con el número: " + facturaGuardada.getId());
-        FacturaResponseDTO.FacturaData data = new FacturaResponseDTO.FacturaData();
-        data.setNumero(facturaGuardada.getId());
-        data.setTotal(total);
-        data.setFecha(facturaGuardada.getFecha());
-        response.setData(data);
+		// Obtener los detalles de compra desde el repositorio
+		List<DetallesCompra> detallesCompraList = detallesCompraRepository.findByCompra(compra);
 
-        return response;
-    }
+		// Agregar productos
+		List<ProductoDTO> productos = new ArrayList<>();
+		for (DetallesCompra detalles : detallesCompraList) {
+			ProductoDTO productoDTO = new ProductoDTO();
+			productoDTO.setReferencia(detalles.getProducto().getReferencia());
+			productoDTO.setNombre(detalles.getProducto().getNombre());
+			productoDTO.setCantidad(detalles.getCantidad());
+			productoDTO.setPrecio(detalles.getPrecio());
+			productoDTO.setDescuento(detalles.getDescuento());
+			productoDTO.setSubtotal(detalles.getPrecio() * detalles.getCantidad()
+					- (detalles.getPrecio() * detalles.getCantidad() * detalles.getDescuento() / 100));
+			productos.add(productoDTO);
+		}
 
-    public FacturaConsultaResponseDTO consultarFactura(String tiendaUuid, FacturaConsultaRequestDTO request) {
-        // Validar el token del cajero
-        Cajero cajero = cajeroRepository.findByToken(request.getToken()).orElseThrow(
-                () -> new IllegalArgumentException("El token no corresponde a ningún cajero en la tienda"));
+		response.setProductos(productos);
 
-        // Validar la factura
-        Compra compra = compraRepository.findById(request.getFactura())
-                .orElseThrow(() -> new IllegalArgumentException("Factura no encontrada"));
+		// Convertir cajero a CajeroDTO
+		CajeroDTO cajeroDTO = new CajeroDTO();
+		cajeroDTO.setDocumento(cajero.getDocumento());
+		cajeroDTO.setNombre(cajero.getNombre());
+		response.setCajero(cajeroDTO);
 
-        if (!compra.getCajero().equals(cajero)) {
-            throw new IllegalArgumentException("El cajero no tiene permisos para consultar esta factura");
-        }
-
-        // Validar el cliente
-        Cliente cliente = clienteRepository
-                .findByDocumentoAndTipoDocumento(request.getCliente(), compra.getCliente().getTipoDocumento().toString()) // Cambié el objeto por el string
-                .orElseThrow(() -> new IllegalArgumentException("Cliente no encontrado"));
-
-        // Construir la respuesta
-        FacturaConsultaResponseDTO response = new FacturaConsultaResponseDTO();
-        response.setTotal(compra.getTotal());
-        response.setImpuestos(compra.getImpuestos());
-
-        // Convertir cliente a ClienteDTO
-        ClienteDTO clienteDTO = new ClienteDTO();
-        clienteDTO.setDocumento(cliente.getDocumento());
-        clienteDTO.setNombre(cliente.getNombre());
-        clienteDTO.setTipoDocumento(cliente.getTipoDocumento().toString()); // Ahora pasamos el valor como String
-        response.setCliente(clienteDTO);
-
-        // Obtener los detalles de compra desde el repositorio
-        List<DetallesCompra> detallesCompraList = detallesCompraRepository.findByCompra(compra);
-
-        // Agregar productos
-        List<ProductoDTO> productos = new ArrayList<>();
-        for (DetallesCompra detalles : detallesCompraList) {
-            ProductoDTO productoDTO = new ProductoDTO();
-            productoDTO.setReferencia(detalles.getProducto().getReferencia());
-            productoDTO.setNombre(detalles.getProducto().getNombre());
-            productoDTO.setCantidad(detalles.getCantidad());
-            productoDTO.setPrecio(detalles.getPrecio());
-            productoDTO.setDescuento(detalles.getDescuento());
-            productoDTO.setSubtotal(detalles.getPrecio() * detalles.getCantidad()
-                    - (detalles.getPrecio() * detalles.getCantidad() * detalles.getDescuento() / 100));
-            productos.add(productoDTO);
-        }
-
-        response.setProductos(productos);
-
-        // Convertir cajero a CajeroDTO
-        CajeroDTO cajeroDTO = new CajeroDTO();
-        cajeroDTO.setDocumento(cajero.getDocumento());
-        cajeroDTO.setNombre(cajero.getNombre());
-        response.setCajero(cajeroDTO);
-
-        return response;
-    }
+		return response;
+	}
 }

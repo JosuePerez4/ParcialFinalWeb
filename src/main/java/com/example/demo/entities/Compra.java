@@ -29,10 +29,8 @@ public class Compra {
     @JoinColumn(name = "cajero_id", nullable = false)
     private Cajero cajero;
 
-    @Column(precision = 10, scale = 2)
     private Double total;
 
-    @Column(precision = 5, scale = 2)
     private Double impuestos;
 
     @Column
