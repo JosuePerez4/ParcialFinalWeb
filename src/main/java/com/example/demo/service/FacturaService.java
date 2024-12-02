@@ -44,9 +44,10 @@ public class FacturaService {
 				.orElseThrow(() -> new IllegalArgumentException("La tienda no existe"));
 
 		// 2. Validar el cliente
-		Cliente cliente = clienteRepository
-				.findByDocumentoAndTipoDocumento(request.getCliente().getDocumento(),
-						request.getCliente().getTipoDocumento().toString()) // Corregir el tipo de tipoDocumento
+		Cliente cliente = clienteRepository.findByDocumentoAndTipoDocumento(
+			    request.getCliente().getDocumento(),
+			    request.getCliente().getTipoDocumento()  // Aquí no es necesario el .toString()
+			)
 				.orElseGet(() -> {
 					// Registrar el cliente si no existe
 					Cliente nuevoCliente = new Cliente();
