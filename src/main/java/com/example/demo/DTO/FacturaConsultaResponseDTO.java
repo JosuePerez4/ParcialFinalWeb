@@ -3,6 +3,8 @@ package com.example.demo.DTO;
 import lombok.Data;
 import java.util.List;
 
+import com.example.demo.entities.TipoDocumento;
+
 @Data
 public class FacturaConsultaResponseDTO {
     private double total;
